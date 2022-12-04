@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <array>
+#include <string>
 
 struct sockaddr_in;
 struct fd_set;
@@ -18,14 +19,14 @@ class Server;
 
 class Connection {
 public:
-    Connection(int s);
-    static const int bufsz = 1024;
+    Connection(int id);
     
-    int sock;
-    int receive_size;
-    int send_size;
-    char receive[bufsz];
-    char send[bufsz];
+    void set_as_closed();
+    bool is_must_close();
+    int get_id();
+    
+    void send(const std::string& msg);
+    void receive(std::string& msg);
     
     using on_read_callback = void (*)(Connection* conn, void* user_bind_data);
     using on_write_callback = void (*)(Connection* conn, void* user_bind_data);
@@ -38,10 +39,14 @@ public:
     void on_close();
 
 private:
-    on_read_callback read_f = nullptr;
-    on_write_callback write_f = nullptr;
-    on_close_callback close_f = nullptr;
-    void* user_bind_data = nullptr;
+    static const int bufsz = 1024;
+    
+    on_read_callback read_cb_ = nullptr;
+    on_write_callback write_cb_ = nullptr;
+    on_close_callback close_cb_ = nullptr;
+    void* user_bind_data_ = nullptr;
+    int id_;
+    bool must_close_ = false;
 };
 
 class Server

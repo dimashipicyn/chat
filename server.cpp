@@ -16,36 +16,74 @@
 #include <memory>
 #include <vector>
 
-Connection::Connection(int s)
-: sock(s)
-, receive_size(0)
-, send_size(0)
+const int Connection::bufsz;
+
+Connection::Connection(int id)
+    : id_(id)
 {
     
 }
 
 void Connection::bind(on_read_callback fr, on_write_callback fw, on_close_callback fc, void* user_data) {
-    read_f = fr;
-    write_f = fw;
-    close_f = fc;
-    user_bind_data = user_data;
+    read_cb_ = fr;
+    write_cb_ = fw;
+    close_cb_ = fc;
+    user_bind_data_ = user_data;
+}
+
+void Connection::send(const std::string& msg)
+{
+    int msg_size = std::min(static_cast<int>(msg.size()), bufsz);
+    int ret = write(id_, msg.c_str(), msg_size);
+    if (ret <= 0) {
+        set_as_closed();
+    }
+}
+
+void Connection::receive(std::string& msg)
+{
+    msg.clear();
+    msg.resize(bufsz);
+    int ret = read(id_, msg.data(), bufsz);
+    if (ret > 0) {
+        msg.resize(ret);
+    }
+    else {
+        msg.clear();
+        set_as_closed();
+    }
+}
+
+void Connection::set_as_closed()
+{
+    must_close_ = true;
+}
+
+bool Connection::is_must_close()
+{
+    return must_close_;
+}
+
+int Connection::get_id()
+{
+    return id_;
 }
 
 void Connection::on_read() {
-    if (read_f) {
-        read_f(this, user_bind_data);
+    if (read_cb_) {
+        read_cb_(this, user_bind_data_);
     }
 }
 
 void Connection::on_write() {
-    if (write_f) {
-        write_f(this, user_bind_data);
+    if (write_cb_) {
+        write_cb_(this, user_bind_data_);
     }
 }
 
 void Connection::on_close() {
-    if (close_f) {
-        close_f(this, user_bind_data);
+    if (close_cb_) {
+        close_cb_(this, user_bind_data_);
     }
 }
 
@@ -141,14 +179,15 @@ void Server::accept(fd_set* readfds) {
 void Server::read(fd_set* readfds) {
     for (auto begin = connections_.begin(); begin != connections_.end();) {
         Connection& c = begin->second;
-        if (FD_ISSET(begin->first, readfds)) {
-            if (c.receive_size = ::read(c.sock, c.receive, Connection::bufsz - 1); c.receive_size <= 0) {
+        int socket = begin->first;
+        if (FD_ISSET(socket, readfds)) {
+            c.on_read();
+            if (c.is_must_close()) {
                 c.on_close();
-                close(c.sock);
+                close(socket);
                 begin = connections_.erase(begin);
                 continue;
             }
-            c.on_read();
         }
         begin++;
     }
@@ -157,15 +196,14 @@ void Server::read(fd_set* readfds) {
 void Server::write() {
     for (auto begin = connections_.begin(); begin != connections_.end();) {
         Connection& c = begin->second;
+        int socket = begin->first;
         
         c.on_write();
-        if (c.send_size > 0) {
-            if (int writed = ::write(c.sock, c.send, c.send_size) <= 0) {
-                c.on_close();
-                close(c.sock);
-                begin = connections_.erase(begin);
-                continue;
-            }
+        if (c.is_must_close()) {
+            c.on_close();
+            close(socket);
+            begin = connections_.erase(begin);
+            continue;
         }
         begin++;
     }
@@ -231,11 +269,16 @@ void rd(Connection* c, void* u)
 {
     ctx* context = (ctx*)u;
     
-    std::string msg(c->receive, c->receive_size);
+    std::string msg;
+    c->receive(msg);
     
-    User& user = context->chat.users[c->sock];
+    if (msg.empty()) {
+        return;
+    }
+    
+    User& user = context->chat.users[c->get_id()];
     Room& room = context->chat.rooms[user.room_id];
-    
+
     for (auto user_id : room.users_ids) {
         if (user_id != user.id) {
             User& other_user = context->chat.users[user_id];
@@ -248,12 +291,12 @@ void wr(Connection* c, void* u)
 {
     ctx* context = (ctx*)u;
 
-    User& user = context->chat.users[c->sock];
+    User& user = context->chat.users[c->get_id()];
     
-    c->send_size = 0;
     for (auto& msg : user.messages) {
-        memcpy(c->send + c->send_size, msg.data(), msg.size());
-        c->send_size += msg.size();
+        if (!msg.empty()) {
+            c->send(msg);
+        }
     }
     user.messages.clear();
 }
@@ -262,7 +305,7 @@ void cl(Connection* c, void* u)
 {
     ctx* context = (ctx*)u;
     
-    User& user = context->chat.users[c->sock];
+    User& user = context->chat.users[c->get_id()];
     Room& room = context->chat.rooms[user.room_id];
     
     room.users_ids.erase(std::remove(room.users_ids.begin(), room.users_ids.end(), user.id));
@@ -278,13 +321,13 @@ void acc(Connection* c, void* u)
     Room& room = context->chat.get_free_room();
     
     User user;
-    user.id = c->sock;
-    user.name = "User " + std::to_string(c->sock);
+    user.id = c->get_id();
+    user.name = "User " + std::to_string(c->get_id());
     user.room_id = room.id;
     
     room.users_ids.push_back(user.id);
     
-    context->chat.users.emplace(c->sock, user);
+    context->chat.users.emplace(c->get_id(), user);
 }
 
 int main()
