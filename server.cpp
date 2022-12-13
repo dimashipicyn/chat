@@ -209,134 +209,15 @@ void Server::write() {
     }
 }
 
-struct User
-{
-    int id = 0;
-    int room_id = 0;
-    std::string name;
-    
-    std::vector<std::string> messages;
-};
-
-struct Room
-{
-    Room() {}
-    Room(const std::string& n, int i)
-    : id(i)
-    , name(n)
-    {
-        
-    }
-    int id;
-    std::string name;
-    std::vector<int> users_ids;
-};
-
-struct Chat
-{
-    Chat()
-    {
-        rooms.emplace(1, Room("Room 1", 1));
-        rooms.emplace(2, Room("Room 2", 2));
-        rooms.emplace(3, Room("Room 3", 3));
-    }
-    static const int max_rooms = 10;
-    static const int max_users_in_room = 3;
-    
-    Room& get_free_room() {
-        for (auto& r : rooms) {
-            if (r.second.users_ids.size() < max_users_in_room) {
-                return r.second;
-            }
-        }
-        int max_id = rooms.rbegin()->first;
-        auto& r = rooms[max_id];
-        r.id = max_id;
-        r.name = "Room " + std::to_string(max_id);
-        return r;
-    }
-    
-    std::map<int, Room> rooms;
-    std::map<int, User> users;
-};
-
-struct ctx
-{
-    Chat chat;
-};
-
-void rd(Connection* c, void* u)
-{
-    ctx* context = (ctx*)u;
-    
-    std::string msg;
-    c->receive(msg);
-    
-    if (msg.empty()) {
-        return;
-    }
-    
-    User& user = context->chat.users[c->get_id()];
-    Room& room = context->chat.rooms[user.room_id];
-
-    for (auto user_id : room.users_ids) {
-        if (user_id != user.id) {
-            User& other_user = context->chat.users[user_id];
-            other_user.messages.push_back(user.name + ": " + msg);
-        }
-    }
-}
-
-void wr(Connection* c, void* u)
-{
-    ctx* context = (ctx*)u;
-
-    User& user = context->chat.users[c->get_id()];
-    
-    for (auto& msg : user.messages) {
-        if (!msg.empty()) {
-            c->send(msg);
-        }
-    }
-    user.messages.clear();
-}
-
-void cl(Connection* c, void* u)
-{
-    ctx* context = (ctx*)u;
-    
-    User& user = context->chat.users[c->get_id()];
-    Room& room = context->chat.rooms[user.room_id];
-    
-    room.users_ids.erase(std::remove(room.users_ids.begin(), room.users_ids.end(), user.id));
-    context->chat.users.erase(user.id);
-}
-
-void acc(Connection* c, void* u)
-{
-    c->bind(rd, wr, cl, u);
-    
-    ctx* context = (ctx*)u;
-    
-    Room& room = context->chat.get_free_room();
-    
-    User user;
-    user.id = c->get_id();
-    user.name = "User " + std::to_string(c->get_id());
-    user.room_id = room.id;
-    
-    room.users_ids.push_back(user.id);
-    
-    context->chat.users.emplace(c->get_id(), user);
-}
+#include "chat.hpp"
 
 int main()
 {
     Server s;
     
-    ctx c;
+    Chat chat;
     
-    s.register_accept_func(acc, &c);
+    s.register_accept_func(Chat::acc, &chat);
     s.run();
     return 0;
 }
